@@ -133,7 +133,7 @@ function LoginForm() {
       } else {
         setMessage({ 
           type: 'success', 
-          text: 'Check your UCI email for the 6-digit code! 📧' 
+          text: 'Check your UCI email for the 8-digit code! 📧' 
         });
         setStep('code');
       }
@@ -154,8 +154,8 @@ function LoginForm() {
     
     const code = otpCode.trim();
     
-    if (!code || code.length !== 6) {
-      setMessage({ type: 'error', text: 'Please enter the 6-digit code' });
+    if (!code || code.length !== 8) {
+      setMessage({ type: 'error', text: 'Please enter the 8-digit code' });
       return;
     }
     
@@ -293,7 +293,7 @@ function LoginForm() {
                 autoFocus
               />
               <p className="mt-1 text-xs text-neutral-500">
-                We&apos;ll send you a 6-digit code to sign in
+                We&apos;ll send you an 8-digit code to sign in
               </p>
             </div>
             
@@ -346,7 +346,7 @@ function LoginForm() {
                 htmlFor="code" 
                 className="block text-sm font-medium text-neutral-700 mb-1"
               >
-                Enter the 6-digit code
+                Enter the 8-digit code
               </label>
               <input
                 id="code"
@@ -354,13 +354,13 @@ function LoginForm() {
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={otpCode}
-                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="000000"
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                placeholder="00000000"
                 className="input text-center text-2xl tracking-widest font-mono"
                 disabled={loading}
                 autoComplete="one-time-code"
                 autoFocus
-                maxLength={6}
+                maxLength={8}
               />
               <p className="mt-1 text-xs text-neutral-500">
                 Sent to {email}
@@ -382,7 +382,7 @@ function LoginForm() {
             
             <button
               type="submit"
-              disabled={loading || otpCode.length !== 6}
+              disabled={loading || otpCode.length !== 8}
               className="btn-primary w-full"
             >
               {loading ? (
