@@ -447,30 +447,65 @@ export async function cancelTask(taskId: string): Promise<ActionResult> {
     
     // [EXTENSION] Refund payment here
     
-    // Update the task
-    const { error: updateError } = await supabase
-      .from('tasks')
-      .update({
-        status: 'CANCELED',
-        canceled_at: new Date().toISOString(),
-      })
-      .eq('id', taskId);
+    /**
+     * CANCELLATION LOGIC:
+     * - If WORKER cancels: Task goes back to OPEN so poster can find another worker
+     * - If POSTER cancels: Task stays CANCELED (they don't want it anymore)
+     * 
+     * This is more user-friendly than making the poster re-post.
+     */
+    const workerCanceling = isWorker && task.status === 'ACCEPTED';
     
-    if (updateError) {
-      console.error('Failed to cancel task:', updateError);
-      return { success: false, error: 'Failed to cancel task' };
+    if (workerCanceling) {
+      // Worker canceling - revert to OPEN
+      const { error: updateError } = await supabase
+        .from('tasks')
+        .update({
+          status: 'OPEN',
+          accepted_by_user_id: null,
+          accepted_at: null,
+        })
+        .eq('id', taskId);
+      
+      if (updateError) {
+        console.error('Failed to cancel task:', updateError);
+        return { success: false, error: 'Failed to cancel task' };
+      }
+      
+      // Add system message
+      await supabase
+        .from('messages')
+        .insert({
+          task_id: taskId,
+          sender_id: user.id,
+          type: 'SYSTEM',
+          body: 'Worker withdrew. Task is open again for others to accept.',
+        });
+    } else {
+      // Poster canceling - mark as CANCELED
+      const { error: updateError } = await supabase
+        .from('tasks')
+        .update({
+          status: 'CANCELED',
+          canceled_at: new Date().toISOString(),
+        })
+        .eq('id', taskId);
+      
+      if (updateError) {
+        console.error('Failed to cancel task:', updateError);
+        return { success: false, error: 'Failed to cancel task' };
+      }
+      
+      // Add system message
+      await supabase
+        .from('messages')
+        .insert({
+          task_id: taskId,
+          sender_id: user.id,
+          type: 'SYSTEM',
+          body: 'Task canceled by the poster.',
+        });
     }
-    
-    // Add system message
-    const cancellerRole = isPoster ? 'poster' : 'worker';
-    await supabase
-      .from('messages')
-      .insert({
-        task_id: taskId,
-        sender_id: user.id,
-        type: 'SYSTEM',
-        body: `Task canceled by the ${cancellerRole}.`,
-      });
     
     revalidatePath('/');
     revalidatePath(`/tasks/${taskId}`);

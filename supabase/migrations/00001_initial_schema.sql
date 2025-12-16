@@ -365,14 +365,18 @@ CREATE POLICY "tasks_update"
     poster_id = auth.uid()
     -- Or accepted worker can update (for cancellation only)
     OR accepted_by_user_id = auth.uid()
+    -- Or anyone can update an OPEN task (for accepting)
+    -- The WITH CHECK clause will verify they're actually accepting properly
+    OR status = 'OPEN'
   )
   WITH CHECK (
     -- Case 1: Poster editing while OPEN (can change title, description, price, category)
     (poster_id = auth.uid() AND status = 'OPEN')
     -- Case 2: Poster canceling (OPEN -> CANCELED or ACCEPTED -> CANCELED)
     OR (poster_id = auth.uid() AND status = 'CANCELED')
-    -- Case 3: Worker canceling (ACCEPTED -> CANCELED)
-    OR (accepted_by_user_id = auth.uid() AND status = 'CANCELED')
+    -- Case 3: Worker withdrawing (ACCEPTED -> OPEN, clears accepted_by)
+    -- This allows the task to be available again for other workers
+    OR (status = 'OPEN' AND accepted_by_user_id IS NULL)
     -- Case 4: Someone accepting (OPEN -> ACCEPTED, not poster, accepted rules)
     OR (
       status = 'ACCEPTED' 
