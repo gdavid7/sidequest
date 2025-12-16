@@ -28,16 +28,73 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { isValidUCIEmail } from '@/lib/utils';
 
+/**
+ * Wrapper component to handle Suspense boundary for useSearchParams.
+ */
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginSkeleton />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+/**
+ * Loading skeleton while search params load.
+ */
+function LoginSkeleton() {
+  return (
+    <div className="w-full max-w-md animate-pulse">
+      <div className="text-center mb-8">
+        <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-neutral-200" />
+        <div className="h-8 bg-neutral-200 rounded w-32 mx-auto mb-2" />
+        <div className="h-4 bg-neutral-200 rounded w-48 mx-auto" />
+      </div>
+      <div className="card p-6">
+        <div className="h-12 bg-neutral-200 rounded mb-4" />
+        <div className="h-12 bg-neutral-200 rounded" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The actual login form component.
+ */
+function LoginForm() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const searchParams = useSearchParams();
   
   const supabase = createClient();
+  
+  /**
+   * Check for error messages in URL (from failed auth callback).
+   * This handles cases like expired magic links.
+   */
+  useEffect(() => {
+    const error = searchParams.get('error');
+    const errorDescription = searchParams.get('error_description');
+    const errorCode = searchParams.get('error_code');
+    
+    if (error || errorDescription) {
+      // Provide user-friendly error messages
+      let friendlyMessage = errorDescription || error || 'Login failed';
+      
+      // Make common errors more understandable
+      if (errorCode === 'otp_expired' || friendlyMessage.includes('expired')) {
+        friendlyMessage = 'Your magic link has expired or was already used. This can happen if:\n\n• You clicked the link on a different device/browser\n• Your email app previewed the link\n• You waited too long to click\n\nPlease request a new link below.';
+      }
+      
+      setMessage({ type: 'error', text: friendlyMessage });
+    }
+  }, [searchParams]);
   
   /**
    * Handle magic link login.
@@ -159,7 +216,7 @@ export default function LoginPage() {
           {/* Status message */}
           {message && (
             <div 
-              className={`p-3 rounded-xl text-sm animate-slide-down ${
+              className={`p-3 rounded-xl text-sm animate-slide-down whitespace-pre-line ${
                 message.type === 'success' 
                   ? 'bg-green-50 text-green-800 border border-green-200' 
                   : 'bg-red-50 text-red-800 border border-red-200'
