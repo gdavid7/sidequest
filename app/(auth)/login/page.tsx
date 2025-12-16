@@ -3,33 +3,30 @@
  * Login Page
  * =============================================================================
  * 
- * Magic link login page for UCI students/staff.
+ * OTP code login page for UCI students/staff.
+ * 
+ * WHY OTP CODES INSTEAD OF MAGIC LINKS?
+ * =====================================
+ * Magic links have issues on iOS/iPad:
+ * - Mail app previews links, consuming the one-time token
+ * - Opening links in different browser contexts fails
+ * - Safari's tracking prevention interferes
+ * 
+ * OTP codes are more reliable:
+ * - User manually types the 6-digit code
+ * - No link clicking issues
+ * - Works on any device/browser
  * 
  * SECURITY: UCI-Only Authentication
  * ================================
- * We ONLY allow @uci.edu emails. Here's why:
- * 
- * 1. WHY NOT GENERIC .edu?
- *    - Any university email could sign up
- *    - No way to verify they're actually UCI
- *    - Defeats the purpose of a local, trusted community
- * 
- * 2. WHY @uci.edu SPECIFICALLY?
- *    - Verified UCI affiliation (student/staff/faculty)
- *    - Creates accountability (real identity tied to university)
- *    - If issues arise, users can be identified via UCI admin
- *    - Builds trust: you know who you're dealing with
- * 
- * 3. ENFORCEMENT:
- *    - Client-side: Prevents accidental non-UCI signups (UX)
- *    - Server-side: Supabase auth hook validates domain (SECURITY)
- *    - Both are needed! Client-only is bypassable.
+ * We ONLY allow @uci.edu emails. This creates a trusted, local community
+ * where users can be identified via their university affiliation.
  */
 
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { isValidUCIEmail } from '@/lib/utils';
 
@@ -64,66 +61,54 @@ function LoginSkeleton() {
 }
 
 /**
- * The actual login form component.
+ * The actual login form component with two steps:
+ * 1. Enter email -> Send OTP code
+ * 2. Enter code -> Verify and login
  */
 function LoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  
+  // Form state
   const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [step, setStep] = useState<'email' | 'code'>('email');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const searchParams = useSearchParams();
   
   const supabase = createClient();
   
   /**
    * Check for error messages in URL (from failed auth callback).
-   * This handles cases like expired magic links.
    */
   useEffect(() => {
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
-    const errorCode = searchParams.get('error_code');
     
     if (error || errorDescription) {
-      // Provide user-friendly error messages
-      let friendlyMessage = errorDescription || error || 'Login failed';
-      
-      // Make common errors more understandable
-      if (errorCode === 'otp_expired' || friendlyMessage.includes('expired')) {
-        friendlyMessage = 'Your magic link has expired or was already used. This can happen if:\n\n• You clicked the link on a different device/browser\n• Your email app previewed the link\n• You waited too long to click\n\nPlease request a new link below.';
-      }
-      
-      setMessage({ type: 'error', text: friendlyMessage });
+      setMessage({ 
+        type: 'error', 
+        text: errorDescription || error || 'Login failed. Please try again.' 
+      });
     }
   }, [searchParams]);
   
   /**
-   * Handle magic link login.
-   * 
-   * Flow:
-   * 1. User enters UCI email
-   * 2. We validate it's @uci.edu (client-side)
-   * 3. Supabase sends magic link email
-   * 4. User clicks link -> /auth/callback
-   * 5. Callback creates session -> redirect to home
+   * Step 1: Send OTP code to email.
    */
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
     
-    // Normalize email
     const normalizedEmail = email.toLowerCase().trim();
     
-    // Client-side validation (UX only - server validates too)
     if (!normalizedEmail) {
       setMessage({ type: 'error', text: 'Please enter your UCI email' });
       return;
     }
     
     if (!isValidUCIEmail(normalizedEmail)) {
-      setMessage({ 
-        type: 'error', 
-        text: 'Please use your @uci.edu email address' 
-      });
+      setMessage({ type: 'error', text: 'Please use your @uci.edu email address' });
       return;
     }
     
@@ -131,41 +116,139 @@ function LoginForm() {
     
     try {
       /**
-       * Send magic link via Supabase Auth.
-       * 
-       * The emailRedirectTo tells Supabase where to redirect after
-       * the user clicks the magic link in their email.
-       * 
-       * IMPORTANT: This URL must be in your Supabase project's
-       * "Redirect URLs" whitelist (Dashboard -> Auth -> URL Configuration)
+       * Send OTP code via Supabase Auth.
+       * This sends a 6-digit code to the user's email.
        */
       const { error } = await supabase.auth.signInWithOtp({
         email: normalizedEmail,
         options: {
-          // Where to redirect after clicking the magic link
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          // Don't create a magic link, just send the code
+          shouldCreateUser: true,
         },
       });
       
       if (error) {
-        console.error('Login error:', error);
-        setMessage({ 
-          type: 'error', 
-          text: error.message || 'Failed to send magic link' 
-        });
+        console.error('Send code error:', error);
+        setMessage({ type: 'error', text: error.message || 'Failed to send code' });
       } else {
         setMessage({ 
           type: 'success', 
-          text: 'Check your UCI email for the magic link! 📧' 
+          text: 'Check your UCI email for the 6-digit code! 📧' 
         });
-        setEmail('');
+        setStep('code');
       }
     } catch (err) {
       console.error('Unexpected error:', err);
-      setMessage({ 
-        type: 'error', 
-        text: 'Something went wrong. Please try again.' 
+      setMessage({ type: 'error', text: 'Something went wrong. Please try again.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  /**
+   * Step 2: Verify the OTP code.
+   */
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage(null);
+    
+    const code = otpCode.trim();
+    
+    if (!code || code.length !== 6) {
+      setMessage({ type: 'error', text: 'Please enter the 6-digit code' });
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      /**
+       * Verify the OTP code with Supabase.
+       * If successful, this creates a session and logs the user in.
+       */
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: email.toLowerCase().trim(),
+        token: code,
+        type: 'email',
       });
+      
+      if (error) {
+        console.error('Verify code error:', error);
+        if (error.message.includes('expired')) {
+          setMessage({ 
+            type: 'error', 
+            text: 'Code expired. Please request a new one.' 
+          });
+          setStep('email');
+          setOtpCode('');
+        } else {
+          setMessage({ type: 'error', text: error.message || 'Invalid code' });
+        }
+      } else if (data.user) {
+        // Success! Create profile if needed and redirect
+        setMessage({ type: 'success', text: 'Logging you in...' });
+        
+        // Create profile if it doesn't exist
+        await supabase.from('profiles').upsert(
+          {
+            id: data.user.id,
+            email: data.user.email!.toLowerCase(),
+          },
+          { onConflict: 'id', ignoreDuplicates: true }
+        );
+        
+        // Check if user needs to accept rules
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('accepted_rules')
+          .eq('id', data.user.id)
+          .single();
+        
+        if (profile && !profile.accepted_rules) {
+          router.push('/rules');
+        } else {
+          router.push('/');
+        }
+        router.refresh();
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      setMessage({ type: 'error', text: 'Something went wrong. Please try again.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  /**
+   * Go back to email step.
+   */
+  const handleBack = () => {
+    setStep('email');
+    setOtpCode('');
+    setMessage(null);
+  };
+  
+  /**
+   * Resend the code.
+   */
+  const handleResend = async () => {
+    setMessage(null);
+    setLoading(true);
+    
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.toLowerCase().trim(),
+        options: { shouldCreateUser: true },
+      });
+      
+      if (error) {
+        setMessage({ type: 'error', text: error.message || 'Failed to resend code' });
+      } else {
+        setMessage({ type: 'success', text: 'New code sent! Check your email.' });
+        setOtpCode('');
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to resend code' });
     } finally {
       setLoading(false);
     }
@@ -175,7 +258,6 @@ function LoginForm() {
     <div className="w-full max-w-md animate-fade-in">
       {/* Logo and header */}
       <div className="text-center mb-8">
-        {/* Anteater logo placeholder - use UCI colors */}
         <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-brand-blue-500 to-brand-blue-600 flex items-center justify-center shadow-lg">
           <span className="text-4xl">🐜</span>
         </div>
@@ -189,71 +271,165 @@ function LoginForm() {
       
       {/* Login card */}
       <div className="card p-6">
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label 
-              htmlFor="email" 
-              className="block text-sm font-medium text-neutral-700 mb-1"
-            >
-              UCI Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="yournetid@uci.edu"
-              className="input"
-              disabled={loading}
-              autoComplete="email"
-              autoFocus
-            />
-            <p className="mt-1 text-xs text-neutral-500">
-              We&apos;ll send you a magic link to sign in
-            </p>
-          </div>
-          
-          {/* Status message */}
-          {message && (
-            <div 
-              className={`p-3 rounded-xl text-sm animate-slide-down whitespace-pre-line ${
-                message.type === 'success' 
-                  ? 'bg-green-50 text-green-800 border border-green-200' 
-                  : 'bg-red-50 text-red-800 border border-red-200'
-              }`}
-            >
-              {message.text}
+        {step === 'email' ? (
+          /* Step 1: Enter email */
+          <form onSubmit={handleSendCode} className="space-y-4">
+            <div>
+              <label 
+                htmlFor="email" 
+                className="block text-sm font-medium text-neutral-700 mb-1"
+              >
+                UCI Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="yournetid@uci.edu"
+                className="input"
+                disabled={loading}
+                autoComplete="email"
+                autoFocus
+              />
+              <p className="mt-1 text-xs text-neutral-500">
+                We&apos;ll send you a 6-digit code to sign in
+              </p>
             </div>
-          )}
-          
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary w-full"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle 
-                    className="opacity-25" 
-                    cx="12" cy="12" r="10" 
-                    stroke="currentColor" 
-                    strokeWidth="4"
-                    fill="none"
-                  />
-                  <path 
-                    className="opacity-75" 
-                    fill="currentColor" 
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                Sending magic link...
-              </span>
-            ) : (
-              'Continue with UCI Email'
+            
+            {/* Status message */}
+            {message && (
+              <div 
+                className={`p-3 rounded-xl text-sm animate-slide-down ${
+                  message.type === 'success' 
+                    ? 'bg-green-50 text-green-800 border border-green-200' 
+                    : 'bg-red-50 text-red-800 border border-red-200'
+                }`}
+              >
+                {message.text}
+              </div>
             )}
-          </button>
-        </form>
+            
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary w-full"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle 
+                      className="opacity-25" 
+                      cx="12" cy="12" r="10" 
+                      stroke="currentColor" 
+                      strokeWidth="4"
+                      fill="none"
+                    />
+                    <path 
+                      className="opacity-75" 
+                      fill="currentColor" 
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                  Sending code...
+                </span>
+              ) : (
+                'Send Code'
+              )}
+            </button>
+          </form>
+        ) : (
+          /* Step 2: Enter OTP code */
+          <form onSubmit={handleVerifyCode} className="space-y-4">
+            <div>
+              <label 
+                htmlFor="code" 
+                className="block text-sm font-medium text-neutral-700 mb-1"
+              >
+                Enter the 6-digit code
+              </label>
+              <input
+                id="code"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="000000"
+                className="input text-center text-2xl tracking-widest font-mono"
+                disabled={loading}
+                autoComplete="one-time-code"
+                autoFocus
+                maxLength={6}
+              />
+              <p className="mt-1 text-xs text-neutral-500">
+                Sent to {email}
+              </p>
+            </div>
+            
+            {/* Status message */}
+            {message && (
+              <div 
+                className={`p-3 rounded-xl text-sm animate-slide-down ${
+                  message.type === 'success' 
+                    ? 'bg-green-50 text-green-800 border border-green-200' 
+                    : 'bg-red-50 text-red-800 border border-red-200'
+                }`}
+              >
+                {message.text}
+              </div>
+            )}
+            
+            <button
+              type="submit"
+              disabled={loading || otpCode.length !== 6}
+              className="btn-primary w-full"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle 
+                      className="opacity-25" 
+                      cx="12" cy="12" r="10" 
+                      stroke="currentColor" 
+                      strokeWidth="4"
+                      fill="none"
+                    />
+                    <path 
+                      className="opacity-75" 
+                      fill="currentColor" 
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                  Verifying...
+                </span>
+              ) : (
+                'Verify & Log In'
+              )}
+            </button>
+            
+            {/* Secondary actions */}
+            <div className="flex gap-4 justify-center text-sm">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={loading}
+                className="text-brand-blue-600 hover:text-brand-blue-700"
+              >
+                Resend code
+              </button>
+              <span className="text-neutral-300">|</span>
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={loading}
+                className="text-neutral-500 hover:text-neutral-700"
+              >
+                Use different email
+              </button>
+            </div>
+          </form>
+        )}
       </div>
       
       {/* Info box */}
@@ -273,4 +449,3 @@ function LoginForm() {
     </div>
   );
 }
-
